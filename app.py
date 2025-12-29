@@ -9,37 +9,15 @@ import tempfile
 import uuid
 import traceback
 
-# Import heavy dependencies with error handling
-# These are imported lazily to avoid issues in serverless environments
-pypdf = None
-Workbook = None
-Font = None
-PatternFill = None
-Alignment = None
-Border = None
-Side = None
-get_column_letter = None
-
-def _import_pypdf():
-    global pypdf
-    if pypdf is None:
-        try:
-            from pypdf import PdfReader
-            # Create a simple namespace object
-            class PypdfNamespace:
-                PdfReader = PdfReader
-            pypdf = PypdfNamespace()
-        except ImportError:
-            try:
-                # Fallback to PyPDF2 if pypdf not available
-                from PyPDF2 import PdfReader
-                class PypdfNamespace:
-                    PdfReader = PdfReader
-                pypdf = PypdfNamespace()
-            except Exception as e:
-                print(f"Warning: pypdf/PyPDF2 import failed: {e}")
-                return None
-    return pypdf
+# Import PDF library directly
+try:
+    from pypdf import PdfReader
+except ImportError:
+    try:
+        from PyPDF2 import PdfReader
+    except ImportError:
+        PdfReader = None
+        print("Warning: Neither pypdf nor PyPDF2 is available")
 
 def _import_openpyxl():
     global Workbook, Font, PatternFill, Alignment, Border, Side, get_column_letter
@@ -126,15 +104,13 @@ CATEGORIES = [
 
 def extract_expenses_from_pdf(pdf_path):
     """Extract expense transactions from PDF statement using text extraction"""
-    pypdf_module = _import_pypdf()
-    if pypdf_module is None:
-        raise ImportError("pypdf is not available")
+    if PdfReader is None:
+        raise ImportError("pypdf is not available. Please install it with: pip install pypdf")
     
     expenses = []
     
     try:
         with open(pdf_path, 'rb') as file:
-            PdfReader = pypdf_module.PdfReader
             pdf_reader = PdfReader(file)
             
             # Extract text from all pages
