@@ -316,15 +316,22 @@ Respond with ONLY the exact category name from the list above, nothing else."""
         print(f"Error categorizing with Claude: {e}")
         return 'Other'
 
-def categorize_expenses_batch(expenses, batch_size=25):
+def categorize_expenses_batch(expenses, batch_size=50):
     """Categorize multiple expenses using Claude API in smaller batches"""
     if not expenses:
         return {}
     
+    # For very large statements, use a faster approach
+    if len(expenses) > 200:
+        print(f"Large statement detected ({len(expenses)} transactions). Using optimized processing...")
+        batch_size = 50  # Larger batches for speed
+    
     all_categorized = {}
+    total_batches = (len(expenses) + batch_size - 1) // batch_size
     
     # Process in smaller batches to avoid token limits and improve accuracy
-    for batch_start in range(0, len(expenses), batch_size):
+    for batch_num, batch_start in enumerate(range(0, len(expenses), batch_size), 1):
+        print(f"Processing batch {batch_num}/{total_batches}...")
         batch_expenses = expenses[batch_start:batch_start + batch_size]
         batch_indices = list(range(batch_start, batch_start + len(batch_expenses)))
         
@@ -374,7 +381,7 @@ Use exact category names from the list. Only respond with valid JSON, no other t
                 }]
             }
             
-            response = requests.post(CLAUDE_API_URL, headers=headers, json=data, timeout=30)
+            response = requests.post(CLAUDE_API_URL, headers=headers, json=data, timeout=60)
             response.raise_for_status()
             
             result = response.json()
@@ -442,7 +449,9 @@ Use exact category names from the list. Only respond with valid JSON, no other t
 
 def process_statement(pdf_path):
     """Process PDF statement and return categorized expenses"""
+    print(f"Starting to process statement: {pdf_path}")
     expenses = extract_expenses_from_pdf(pdf_path)
+    print(f"Extracted {len(expenses)} expenses from PDF")
     
     if not expenses:
         return {
@@ -451,23 +460,88 @@ def process_statement(pdf_path):
             'total_transactions': 0
         }
     
-    # Try batch categorization first (more efficient)
-    batch_categories = categorize_expenses_batch(expenses)
-    
-    categorized = defaultdict(lambda: {'total': 0.0, 'transactions': []})
-    
-    if batch_categories:
-        # Use batch results
+    # For very large statements, use keyword-based categorization first
+    # Then use Claude API only for uncategorized transactions
+    if len(expenses) > 300:
+        print(f"Large statement ({len(expenses)} transactions). Using hybrid approach...")
+        categorized = defaultdict(lambda: {'total': 0.0, 'transactions': []})
+        uncategorized = []
+        uncategorized_indices = []
+        
+        # Quick keyword-based categorization
+        keyword_categories = {
+            'food': 'Food & Dining',
+            'restaurant': 'Food & Dining',
+            'cafe': 'Food & Dining',
+            'carrefour': 'Food & Dining',
+            'lulu': 'Food & Dining',
+            'supermarket': 'Food & Dining',
+            'grocery': 'Food & Dining',
+            'uber': 'Transportation',
+            'careem': 'Transportation',
+            'taxi': 'Transportation',
+            'metro': 'Transportation',
+            'amazon': 'Shopping',
+            'shopping': 'Shopping',
+            'mall': 'Shopping',
+            'pharmacy': 'Healthcare',
+            'hospital': 'Healthcare',
+            'medical': 'Healthcare',
+            'salon': 'Personal Care',
+            'gym': 'Personal Care',
+            'fitness': 'Personal Care',
+            'etisalat': 'Bills & Utilities',
+            'du': 'Bills & Utilities',
+            'dewa': 'Bills & Utilities',
+            'utility': 'Bills & Utilities',
+        }
+        
         for i, expense in enumerate(expenses):
-            category = batch_categories.get(i, 'Other')
-            categorized[category]['total'] += expense['amount']
-            categorized[category]['transactions'].append(expense)
+            desc_lower = expense['description'].lower()
+            categorized_flag = False
+            
+            for keyword, category in keyword_categories.items():
+                if keyword in desc_lower:
+                    categorized[category]['total'] += expense['amount']
+                    categorized[category]['transactions'].append(expense)
+                    categorized_flag = True
+                    break
+            
+            if not categorized_flag:
+                uncategorized.append(expense)
+                uncategorized_indices.append(i)
+        
+        print(f"Keyword categorization: {len(expenses) - len(uncategorized)} categorized, {len(uncategorized)} need API")
+        
+        # Use Claude API only for uncategorized transactions
+        if uncategorized:
+            batch_categories = categorize_expenses_batch(uncategorized, batch_size=50)
+            for i, expense in enumerate(uncategorized):
+                category = batch_categories.get(i, 'Other')
+                categorized[category]['total'] += expense['amount']
+                categorized[category]['transactions'].append(expense)
     else:
-        # Fallback to individual categorization
-        for expense in expenses:
-            category = categorize_expense_with_claude(expense['description'])
-            categorized[category]['total'] += expense['amount']
-            categorized[category]['transactions'].append(expense)
+        # Try batch categorization first (more efficient)
+        print(f"Using batch categorization for {len(expenses)} transactions...")
+        batch_categories = categorize_expenses_batch(expenses)
+    
+        categorized = defaultdict(lambda: {'total': 0.0, 'transactions': []})
+        
+        if batch_categories:
+            # Use batch results
+            for i, expense in enumerate(expenses):
+                category = batch_categories.get(i, 'Other')
+                categorized[category]['total'] += expense['amount']
+                categorized[category]['transactions'].append(expense)
+        else:
+            # Fallback to individual categorization
+            print("Falling back to individual categorization...")
+            for i, expense in enumerate(expenses):
+                if i % 50 == 0:
+                    print(f"Processing transaction {i+1}/{len(expenses)}...")
+                category = categorize_expense_with_claude(expense['description'])
+                categorized[category]['total'] += expense['amount']
+                categorized[category]['transactions'].append(expense)
     
     # Convert to regular dict and sort by total
     result = {
