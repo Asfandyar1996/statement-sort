@@ -977,11 +977,19 @@
             const formData = new FormData();
             formData.append('file', file);
 
+            // Add timeout for Render (30 seconds)
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 28000); // 28 seconds
+            
             fetch('/upload', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                signal: controller.signal
             })
-            .then(response => response.json())
+            .then(response => {
+                clearTimeout(timeoutId);
+                return response.json();
+            })
             .then(data => {
                 loading.classList.remove('active');
                 
@@ -993,8 +1001,13 @@
                 displayResults(data);
             })
             .catch(err => {
+                clearTimeout(timeoutId);
                 loading.classList.remove('active');
-                showError('Error processing file: ' + err.message);
+                if (err.name === 'AbortError') {
+                    showError('Request timed out. The statement is too large or processing took too long. Please try with a smaller statement or contact support.');
+                } else {
+                    showError('Error processing file: ' + err.message);
+                }
             });
         }
 

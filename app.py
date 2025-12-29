@@ -110,13 +110,20 @@ def extract_expenses_from_pdf(pdf_path):
     expenses = []
     
     try:
+        print(f"Opening PDF: {pdf_path}")
         with open(pdf_path, 'rb') as file:
             pdf_reader = PdfReader(file)
+            num_pages = len(pdf_reader.pages)
+            print(f"PDF has {num_pages} pages")
             
             # Extract text from all pages
             full_text = ""
-            for page in pdf_reader.pages:
+            for i, page in enumerate(pdf_reader.pages):
+                if i % 10 == 0:
+                    print(f"Extracting text from page {i+1}/{num_pages}...")
                 full_text += page.extract_text() + "\n"
+            
+            print(f"Extracted {len(full_text)} characters of text")
             
             # Pattern to match transaction lines
             # Format: DD-MMM-YY Description Amount (AED optional)
@@ -450,6 +457,7 @@ Use exact category names from the list. Only respond with valid JSON, no other t
 def process_statement(pdf_path):
     """Process PDF statement and return categorized expenses"""
     print(f"Starting to process statement: {pdf_path}")
+    
     expenses = extract_expenses_from_pdf(pdf_path)
     print(f"Extracted {len(expenses)} expenses from PDF")
     
@@ -460,10 +468,15 @@ def process_statement(pdf_path):
             'total_transactions': 0
         }
     
-    # For very large statements, use keyword-based categorization first
-    # Then use Claude API only for uncategorized transactions
+    # Limit processing to first 300 transactions to avoid Render timeout (30s limit)
     if len(expenses) > 300:
-        print(f"Large statement ({len(expenses)} transactions). Using hybrid approach...")
+        print(f"Large statement ({len(expenses)} transactions). Processing first 300 only to avoid timeout.")
+        expenses = expenses[:300]
+        
+        # For very large statements, use keyword-based categorization first
+        # Then use Claude API only for uncategorized transactions
+        if len(expenses) > 200:
+            print(f"Large statement ({len(expenses)} transactions). Using hybrid approach...")
         categorized = defaultdict(lambda: {'total': 0.0, 'transactions': []})
         uncategorized = []
         uncategorized_indices = []
@@ -550,6 +563,7 @@ def process_statement(pdf_path):
         'total_transactions': len(expenses)
     }
     
+    print(f"Processing complete. Returning {len(result['categories'])} categories")
     return result
 
 @app.route('/')
