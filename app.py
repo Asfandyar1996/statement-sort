@@ -6,6 +6,8 @@ import requests
 import json
 from datetime import datetime
 import tempfile
+import uuid
+import traceback
 
 # Import heavy dependencies with error handling
 # These are imported lazily to avoid issues in serverless environments
@@ -78,17 +80,26 @@ except Exception as e:
     # Fallback to default
     app = Flask(__name__)
 
-# For Vercel, use /tmp for uploads (serverless-friendly)
+# For Vercel/Render, use /tmp for uploads (serverless-friendly)
 # For local development, use 'uploads'
-UPLOAD_FOLDER = '/tmp/uploads' if IS_VERCEL else 'uploads'
+# Check if we're in a cloud environment (Vercel or Render)
+IS_CLOUD = os.environ.get('VERCEL') == '1' or os.environ.get('RENDER') == 'true'
+UPLOAD_FOLDER = '/tmp/uploads' if IS_CLOUD else 'uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Create uploads directory if it doesn't exist
 try:
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-except Exception:
-    pass  # Ignore errors in serverless environment
+    print(f"Upload folder created/verified: {app.config['UPLOAD_FOLDER']}")
+except Exception as e:
+    print(f"Warning: Could not create upload folder: {e}")
+    # Try to use /tmp as fallback
+    try:
+        app.config['UPLOAD_FOLDER'] = '/tmp'
+        print(f"Using fallback upload folder: /tmp")
+    except:
+        pass
 
 # Claude API configuration
 CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages'
@@ -558,21 +569,46 @@ def upload_file():
     if not file.filename.lower().endswith('.pdf'):
         return jsonify({'error': 'Please upload a PDF file'}), 400
     
+    filepath = None
     try:
+        # Ensure upload directory exists
+        upload_dir = app.config['UPLOAD_FOLDER']
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Use a unique filename to avoid conflicts
+        unique_filename = f"{uuid.uuid4()}_{file.filename}"
+        filepath = os.path.join(upload_dir, unique_filename)
+        
         # Save uploaded file
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
         file.save(filepath)
+        print(f"File saved to: {filepath}")
         
         # Process the statement
         result = process_statement(filepath)
         
         # Clean up uploaded file
-        os.remove(filepath)
+        if filepath and os.path.exists(filepath):
+            os.remove(filepath)
         
         return jsonify(result)
     
     except Exception as e:
-        return jsonify({'error': f'Error processing file: {str(e)}'}), 500
+        error_msg = str(e)
+        error_trace = traceback.format_exc()
+        print(f"Upload error: {error_msg}")
+        print(f"Traceback: {error_trace}")
+        
+        # Clean up uploaded file if it exists
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except:
+                pass
+        
+        return jsonify({
+            'error': f'Error processing file: {error_msg}',
+            'details': error_trace if app.debug else None
+        }), 500
 
 @app.route('/export', methods=['POST'])
 def export_to_excel():
